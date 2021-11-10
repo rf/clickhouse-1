@@ -56,14 +56,13 @@ var ESCAPE_NULL = {
 	JSONEachRow: "\\N",
 };
 
-const R_ERROR = new RegExp('Code: ([0-9]{2}), .*Exception:');
+const R_ERROR = new RegExp('(Code|Error): ([0-9]{2})[,.] .*Exception: (.+?)$', 'm');
 
 const URI = 'localhost';
 
 const PORT = 8123;
 
 const DATABASE = 'default';
-const USERNAME = 'default';
 
 const FORMAT_NAMES = {
 	JSON: 'json',
@@ -233,12 +232,12 @@ function getErrorObj(res) {
 	if (res.body) {
 		const m = res.body.match(R_ERROR);
 		if (m) {
-			if (m[1] && isNaN(parseInt(m[1])) === false) {
-				err.code = parseInt(m[1]);
+			if (m[2] && isNaN(parseInt(m[2])) === false) {
+				err.code = parseInt(m[2]);
 			}
 			
-			if (m[2]) {
-				err.message = m[2];
+			if (m[3]) {
+				err.message = m[3];
 			}
 		}
 	}
@@ -285,7 +284,9 @@ class Rs extends Transform {
 	writeRow(data) {
 		let row = '';
 		
-		if (Array.isArray(data)) {
+		if (typeof data === 'string') {
+			row = data;
+		} else if (Array.isArray(data)) {
 			row = ClickHouse.mapRowAsArray(data);
 		} else if (isObject(data)) {
 			throw new Error('Error: Inserted data must be an array, not an object.');
@@ -301,6 +302,7 @@ class Rs extends Transform {
 			return Promise.resolve();
 		} else {
 			return new Promise((resolve, reject) => {
+				this.ws.once('error', err => reject(err));
 				this.ws.once('drain', err => {
 					if (err) return reject(err);
 					
@@ -399,7 +401,9 @@ class QueryCursor {
 			fieldList       = [],
 			isFirstElObject = false;
 		
-		if (Array.isArray(data) && Array.isArray(data[0])) {
+		if(Array.isArray(data) && data.every(d => typeof d === 'string')) {
+			values = data;
+		} else if (Array.isArray(data) && Array.isArray(data[0])) {
 			values = data;
 		} else if (Array.isArray(data) && isObject(data[0])) {
 			values = data;
@@ -421,6 +425,9 @@ class QueryCursor {
 		}
 		
 		return values.map(row => {
+			if (typeof row === 'string') {
+				return row;
+			}
 			if (isFirstElObject) {
 				return ClickHouse.mapRowAsObject(fieldList, row);
 			} else {
@@ -515,10 +522,12 @@ class QueryCursor {
 				}
 			} else if (me.isInsert) {
 				if (query.match(/values/i)) {
-					//
+					if (data && data.every(d => typeof d === 'string')) {
+						params['body'] = me._getBodyForInsert();
+					}
 				} else {
 					query += ' FORMAT TabSeparated';
-					
+
 					if (data) {
 						params['body'] = me._getBodyForInsert();
 					}
@@ -808,7 +817,7 @@ class ClickHouse {
 		
 		const u = new URL(url);
 
-		if (u.protocol === 'https:' && port === 443) {
+		if (u.protocol === 'https:' && (port === 443 || !opts.port)) {
 			u.port = '';
 		} else if (! u.port && port) {
 			u.port = port;
@@ -816,7 +825,9 @@ class ClickHouse {
 
 		this.opts.url = u.toString();
 
-		this.opts.username = this.opts.user || this.opts.username || USERNAME;
+		if (this.opts.user || this.opts.username) {
+			this.opts.username = this.opts.user || this.opts.username;
+		}
 		
 		
 		if (this.opts.config) {
