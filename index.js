@@ -581,7 +581,13 @@ class QueryCursor {
 			}
 
 			try {
-				const data = this.opts.raw ? res.body : me.getBodyParser()(res.body);
+        let data;
+        try { 
+          data = me.getBodyParser()(res.body);
+        } catch (e) {
+          console.log(res.body);
+          return cb(null, res.body);
+        }
 				
 				if (me.format === FORMAT_NAMES.JSON) {
 					if (me.useTotals) {
